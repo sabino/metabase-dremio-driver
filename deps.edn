@@ -1,8 +1,2 @@
 {:paths
- ["src" "resources"]
-
- :mvn/repos
- {"dremio-free" {:url "https://maven.dremio.com/free/"}}
-
- :deps
- {com.dremio.distribution/dremio-jdbc-driver {:mvn/version "26.0.5-202509091642240013-f5051a07"}}}
+ ["src" "resources"]}

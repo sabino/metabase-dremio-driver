@@ -8,7 +8,7 @@ This fork modernizes the original `Baoqi/metabase-dremio-driver` line for:
 - Metabase `v0.60.0-beta`
 - Java 21 runtimes
 - Dremio JDBC `26.0.5-202509091642240013-f5051a07`
-- GitHub Actions build + release automation
+- GitHub Actions PR build + release automation
 
 ## Why this fork exists
 
@@ -66,6 +66,7 @@ The generated files are:
 
 ```bash
 export METABASE_DIR=/path/to/metabase
+export DREMIO_JDBC_VERSION=26.0.5-202509091642240013-f5051a07
 ./build.sh
 ```
 
@@ -96,14 +97,35 @@ Typical internal connection settings:
 
 ## GitHub Actions
 
-The workflow in `.github/workflows/build-and-release.yml`:
+Tracked build inputs live in:
+
+- `.github/driver-versions.env`
+
+The main workflow in `.github/workflows/build-and-release.yml`:
 
 - installs Java 21 and the Clojure CLI
-- checks out Metabase `v0.60.0-beta` next to this repository
+- checks out the tracked Metabase version next to this repository
 - runs the same `build.sh` flow used locally
 - validates that the jar contains the compiled plugin init class and JDBC driver
 - uploads the jar and checksum as artifacts
-- publishes a GitHub release on `v*` tags
+- runs automatically on pull requests
+- publishes a GitHub release only on `v*` tags or explicit workflow dispatch
+
+Version tracking automation lives in:
+
+- `.github/workflows/sync-upstream-versions.yml`
+
+That workflow can:
+
+- run on a schedule
+- run manually with explicit Metabase and Dremio JDBC overrides
+- update `.github/driver-versions.env`
+- open a PR instead of pushing directly to `main`
+
+Metabase can be auto-tracked safely through GitHub releases. Dremio JDBC stays
+explicitly pinned in `.github/driver-versions.env` unless you override it
+manually in the sync workflow, since the public Maven metadata is not a
+trustworthy signal for the current Dremio JDBC line.
 
 ## Upstream
 
