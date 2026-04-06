@@ -17,7 +17,6 @@
             [metabase.driver.sql-jdbc.sync.interface :as sync.i]
             [metabase.driver.sql.query-processor :as sql.qp]
             [metabase.legacy-mbql.util :as mbql.u]
-            [metabase.public-settings :as pubset]
             [metabase.query-processor.store :as qp.store]
             [metabase.query-processor.util :as qputil]
             [metabase.util.honey-sql-2 :as h2x]
