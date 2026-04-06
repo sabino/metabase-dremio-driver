@@ -6,7 +6,7 @@
             [clojure.tools.logging :as log]
             [honey.sql :as sql]
             [java-time :as t]
-            [metabase.config :as config]
+            [metabase.config.core :as config]
             [metabase.driver :as driver]
             [metabase.driver.sql-jdbc.common :as sql-jdbc.common]
             [metabase.driver.sql-jdbc.connection :as sql-jdbc.conn]
