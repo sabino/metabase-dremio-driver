@@ -1,0 +1,136 @@
+name: Build And Release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      plugin_version:
+        description: Plugin version embedded in metabase-plugin.yaml
+        required: false
+        default: ""
+      publish_release:
+        description: Publish a GitHub release for this run
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      DEFAULT_PLUGIN_VERSION: 2.0.0-SNAPSHOT
+      METABASE_VERSION: v0.60.0-beta
+      DREMIO_JDBC_VERSION: 26.0.5-202509091642240013-f5051a07
+      JAVA_TOOL_OPTIONS: --add-opens=java.base/java.nio=ALL-UNNAMED
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout Metabase
+        uses: actions/checkout@v4
+        with:
+          repository: metabase/metabase
+          ref: ${{ env.METABASE_VERSION }}
+          path: metabase
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - name: Resolve plugin version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          elif [[ -n "${{ github.event.inputs.plugin_version }}" ]]; then
+            version="${{ github.event.inputs.plugin_version }}"
+          else
+            version="${DEFAULT_PLUGIN_VERSION}"
+          fi
+          echo "plugin_version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build plugin jar
+        run: |
+          chmod +x build.sh
+          export METABASE_DIR="${GITHUB_WORKSPACE}/metabase"
+          ./build.sh
+
+      - name: Stamp plugin version in manifest
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          jar_path = Path("target/dremio.metabase-driver.jar")
+          tmp_path = Path("target/dremio.metabase-driver.tmp.jar")
+          version = "${{ steps.version.outputs.plugin_version }}"
+
+          with zipfile.ZipFile(jar_path) as src, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as dst:
+              for info in src.infolist():
+                  data = src.read(info.filename)
+                  if info.filename == "metabase-plugin.yaml":
+                      text = data.decode("utf-8")
+                      text = __import__("re").sub(r"(?m)^(\\s*version:\\s*).*$", rf"\\g<1>{version}", text, count=1)
+                      data = text.encode("utf-8")
+                  dst.writestr(info, data)
+
+          tmp_path.replace(jar_path)
+          PY
+
+      - name: Verify compiled plugin contents
+        run: |
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          jar_path = Path("target/dremio.metabase-driver.jar")
+          required = {
+              "metabase/driver/dremio__init.class",
+              "metabase-plugin.yaml",
+              "com/dremio/jdbc/Driver.class",
+          }
+          with zipfile.ZipFile(jar_path) as jar:
+              names = set(jar.namelist())
+          missing = sorted(required - names)
+          if missing:
+              raise SystemExit(f"Missing required plugin entries: {missing}")
+          print("Verified plugin entries:", ", ".join(sorted(required)))
+          PY
+
+      - name: Write checksum
+        run: |
+          mkdir -p dist
+          sha256sum target/dremio.metabase-driver.jar > dist/dremio.metabase-driver.jar.sha256
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dremio-metabase-driver
+          path: |
+            target/dremio.metabase-driver.jar
+            dist/dremio.metabase-driver.jar.sha256
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', steps.version.outputs.plugin_version) }}
+          generate_release_notes: true
+          files: |
+            target/dremio.metabase-driver.jar
+            dist/dremio.metabase-driver.jar.sha256

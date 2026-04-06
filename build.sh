@@ -1,16 +1,23 @@
-#!/bin/bash
-cd $(dirname $0) 
-DRIVER_PATH=$(pwd)
+#!/usr/bin/env bash
 
-cd ../metabase
+set -euo pipefail
 
-DREMIO_DRIVER_VERSION=24.0.0-202302100528110223-3a169b7c
+cd "$(dirname "$0")"
+DRIVER_PATH="$(pwd)"
+METABASE_DIR="${METABASE_DIR:-$(cd ../metabase && pwd)}"
+
+if [[ ! -f "${METABASE_DIR}/deps.edn" ]]; then
+  echo "Metabase source checkout not found at ${METABASE_DIR}"
+  echo "Set METABASE_DIR or place this repo next to a metabase checkout."
+  exit 1
+fi
+
+cd "${METABASE_DIR}"
 
 clojure \
-  -Sdeps '{:mvn/repos {"dremio-free" {:url "https://maven.dremio.com/free/"}} :aliases {:dremio { :extra-deps {com.dremio.distribution/dremio-jdbc-driver {:mvn/version "'${DREMIO_DRIVER_VERSION}'"} com.metabase/dremio-driver {:local/root "'${DRIVER_PATH}'"} }}}}'  \
+  -Sdeps "{:mvn/repos {\"dremio-free\" {:url \"https://maven.dremio.com/free/\"}} :aliases {:dremio {:extra-deps {com.metabase/dremio-driver {:local/root \"${DRIVER_PATH}\"}}}}}" \
   -X:build:dremio \
-  build-drivers.build-driver/build-driver! \
+  build-drivers.build-driver/build-driver\! \
   "{:driver :dremio, :project-dir \"${DRIVER_PATH}\", :target-dir \"${DRIVER_PATH}/target\"}"
 
 cd "${DRIVER_PATH}"
-

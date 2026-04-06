@@ -1,63 +1,116 @@
-﻿# metabase-dremio-driver
+# Metabase Dremio Driver
 
-Dremio driver for Metabase BI
+Dremio driver for Metabase, packaged as a plugin JAR with the current official
+Dremio JDBC driver bundled inside it.
 
-Version compatibility:
+This fork modernizes the original `Baoqi/metabase-dremio-driver` line for:
 
--   Version 1.5.x works with Metabase v0.51.0/v1.51.0 and above
--   Version 1.4.x works with Metabase v0.50.0/v1.50.0 and above
--   Version 1.3.x works with Metabase v0.48.0/v1.48.0 and above
--   Version 1.2.x works with Metabase v0.46.0/v1.46.0 and above
--   Version 1.1.x works with Metabase v0.43.0/v1.43.0 and bellow v0.46.0/v1.46.0 (exclude)
--   Version 1.0.x works with Metabase bellow v0.43.0/v1.43.0 (exclude)
+- Metabase `v0.60.0-beta`
+- Java 21 runtimes
+- Dremio JDBC `26.0.5-202509091642240013-f5051a07`
+- GitHub Actions build + release automation
 
+## Why this fork exists
 
-Tested on:
+The upstream Dremio plugin was pinned to an older Dremio JDBC line. That older
+JDBC worked for previous Metabase versions, but it is no longer a good fit for
+current Dremio deployments and Metabase 60 beta.
 
--   Dremio 24.0.0+
--   Metabase 0.51.0+
+This fork keeps the existing Dremio-specific Metabase driver behavior while
+updating the bundled JDBC payload and release process.
 
+## Compatibility target
 
-## Which features works
+- Dremio: `26.x`
+- Metabase: `v0.60.0-beta`
+- Java: `21`
 
-Dremio Driver can work in most metabase functionalities:
+## Runtime note for Java 21
 
--   get correct data type for columns
--   support filter by numbers & strings & datetime
--   get table lists
--   x-ray on dremio tables
+When Metabase runs on Java 21, the current Dremio JDBC line requires this JVM
+flag:
 
+```bash
+JAVA_TOOL_OPTIONS=--add-opens=java.base/java.nio=ALL-UNNAMED
+```
 
-## How to use
+Without it, the Dremio JDBC driver can fail during direct-buffer setup.
 
-1.  Download the dremio.metabase-driver.jar from releases
-2.  Put it under metabase's plugins folder (plugins folder is at the same parent folder with metabase.jar)
-3.  Restart metabase
+## Build
 
+This fork keeps the original build model from the upstream repository:
 
-## Building the driver
+- keep this repository next to a Metabase source checkout
+- run `build.sh`
+- let Metabase build the plugin using its own driver build task
 
-For Metabase 0.43.0+, there were many changes, for exmample, the build tool changed from lein to Clojure CLI Tools. So, the build steps for metabase-dremio-driver 1.1.x also changed.
+The only intended changes are:
 
-For Metabase 0.46.0+, there were more changes. For that version, we should use build.sh instead
+- newer Dremio JDBC
+- Metabase `v0.60.0-beta` compatibility
+- Java 21 compatibility
+- GitHub Actions automation
 
-### Prereq: Build Metabase source locally
+The generated files are:
 
-Please refer to [Building Metabase](https://www.metabase.com/docs/latest/developers-guide/build.html) document.
+- `target/dremio.metabase-driver.jar`
+- `dist/dremio.metabase-driver.jar.sha256`
 
-### Build metabase-dremio-driver
+### Local build
 
-clone the source code, and put it under the same parent folder as metabase's source code.
-
-then, under this metabase-dremio-driver folder, run
-
-```shell
+```bash
 ./build.sh
 ```
 
-The generated "dremio.metabase-driver.jar" can be found in target folder
+### Override versions
 
+```bash
+export METABASE_DIR=/path/to/metabase
+./build.sh
+```
 
-## Thanks
+## Install in Metabase
 
-Referred to <https://github.com/arsenikstiger/dremio-driver>, but most logic are referred from Metabase's redshift & sparksql driver.
+1. Copy `target/dremio.metabase-driver.jar` into Metabase’s `/plugins`
+   directory.
+2. Set:
+
+```bash
+MB_PLUGINS_DIR=/plugins
+JAVA_TOOL_OPTIONS=--add-opens=java.base/java.nio=ALL-UNNAMED
+```
+
+3. Restart Metabase.
+
+The driver will appear in Metabase as `Dremio`.
+
+## Connection settings
+
+Typical internal connection settings:
+
+- Host: `srv-captain--dremio`
+- Port: `31010`
+- Username: your Dremio service user
+- Password: your Dremio service password
+- Schemas: use Metabase schema filters if you want to restrict visibility
+
+## GitHub Actions
+
+The workflow in `.github/workflows/build-and-release.yml`:
+
+- installs Java 21 and the Clojure CLI
+- checks out Metabase `v0.60.0-beta` next to this repository
+- runs the same `build.sh` flow used locally
+- validates that the jar contains the compiled plugin init class and JDBC driver
+- uploads the jar and checksum as artifacts
+- publishes a GitHub release on `v*` tags
+
+## Upstream
+
+Original project:
+
+- `https://github.com/Baoqi/metabase-dremio-driver`
+
+## License
+
+Apache 2.0. See `LICENSE`.
