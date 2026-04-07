@@ -86,6 +86,13 @@
   (or (database-type->base-type column-type)
       ((get-method sql-jdbc.sync/database-type->base-type :postgres) driver (keyword (str/lower-case (name column-type))))))
 
+;; Dremio doesn't expose Postgres enum metadata. Avoid inheriting the Postgres
+;; dynamic type lookup, which issues pg_catalog queries on every result-set
+;; inspection.
+(defmethod driver/dynamic-database-types-lookup :dremio
+  [_driver _database _database-types]
+  nil)
+
 
 ;; Dremio doesn't support "+ (INTERVAL '-30 day')"
 (defmethod sql.qp/add-interval-honeysql-form :dremio
