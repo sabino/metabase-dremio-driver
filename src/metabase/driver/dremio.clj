@@ -28,7 +28,9 @@
 
 (doseq [[feature supported?] {:table-privileges                false
                               :set-timezone                    false
-                              :connection-impersonation        false}]
+                              :connection-impersonation        false
+                              :describe-fks                    false
+                              :metadata/key-constraints        true}]
   (defmethod driver/database-supports? [:dremio feature] [_driver _feature _db] supported?))
 
 ;;; +----------------------------------------------------------------------------------------------------------------+
@@ -41,14 +43,75 @@
 ;;; ----------------------------------------------------- Impls ------------------------------------------------------
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-;; don't use the Postgres specified implementation for `describe-database` and `describe-table`
-(defmethod driver/describe-database :dremio
-           [& args]
-           (apply (get-method driver/describe-database :sql-jdbc) args))
+;; don't use the Postgres-specific metadata sync implementations. Dremio works better
+;; with the generic SQL-JDBC metadata path.
+(defmethod driver/describe-database* :dremio
+  [& args]
+  (apply (get-method driver/describe-database* :sql-jdbc) args))
 
 (defmethod driver/describe-table :dremio
   [& args]
   (apply (get-method driver/describe-table :sql-jdbc) args))
+
+(defmethod driver/describe-fields :dremio
+  [& args]
+  (apply (get-method driver/describe-fields :sql-jdbc) args))
+
+;; Use a Dremio-compatible information_schema query for field sync instead of
+;; inheriting Postgres catalog SQL via the driver hierarchy.
+(defmethod sql-jdbc.sync/describe-fields-sql :dremio
+  [driver & {:keys [schema-names table-names]}]
+  (let [schema-condition (when (seq schema-names)
+                           [:in [:lower :table_schema]
+                            (mapv (fn [schema-name]
+                                    [:inline (str/lower-case schema-name)])
+                                  schema-names)])
+        table-condition  (when (seq table-names)
+                           [:in [:lower :table_name]
+                            (mapv (fn [table-name]
+                                    [:inline (str/lower-case table-name)])
+                                  table-names)])
+        where-clause     (cond-> [[:>= [:inline 1] [:inline 1]]]
+                           schema-condition (conj schema-condition)
+                           table-condition (conj table-condition))]
+    (sql/format
+     {:select [[:column_name :name]
+               [[:- :ordinal_position [:inline 1]] :database-position]
+               [:table_schema :table-schema]
+               [:table_name :table-name]
+               [[[:upper :data_type]] :database-type]
+               [[:inline false] :database-is-auto-increment]
+               [[:case-expr [:= :is_nullable [:inline "NO"]] [:inline true] [:inline false]]
+                :database-required]
+               [[:case-expr [:= :is_nullable [:inline "YES"]] [:inline true] [:inline false]]
+                :database-is-nullable]
+               [[:inline ""] :field-comment]]
+      :from [[:information_schema.columns]]
+      :where (vec (cons :and where-clause))
+      :order-by [:table_schema :table_name :ordinal_position]}
+     :dialect (sql.qp/quote-style driver))))
+
+;; Postgres adds an enum-type preprocessing step during field sync that issues
+;; pg_catalog queries. Dremio does not expose those catalogs, so keep the SQL
+;; results unchanged.
+(defmethod sql-jdbc.sync/describe-fields-pre-process-xf :dremio
+  [_driver _database & _args]
+  identity)
+
+;; Dremio does not support the Postgres-style bulk FK SQL Metabase inherits via
+;; :postgres, but it may still expose per-table metadata through JDBC. Try the
+;; generic JDBC metadata path and degrade to no FKs rather than failing sync.
+(defmethod driver/describe-fks :dremio
+  [_driver _database & _args]
+  [])
+
+(defmethod driver/describe-table-fks :dremio
+  [& args]
+  (try
+    (apply (get-method driver/describe-table-fks :sql-jdbc) args)
+    (catch Exception e
+      (log/warn e "Dremio JDBC foreign key metadata lookup failed; skipping FK sync for this table.")
+      #{})))
 
                   
 (defmethod sql-jdbc.conn/connection-details->spec :dremio
@@ -80,6 +143,13 @@
   [driver column-type]
   (or (database-type->base-type column-type)
       ((get-method sql-jdbc.sync/database-type->base-type :postgres) driver (keyword (str/lower-case (name column-type))))))
+
+;; Dremio doesn't expose Postgres enum metadata. Avoid inheriting the Postgres
+;; dynamic type lookup, which issues pg_catalog queries on every result-set
+;; inspection.
+(defmethod driver/dynamic-database-types-lookup :dremio
+  [_driver _database _database-types]
+  nil)
 
 
 ;; Dremio doesn't support "+ (INTERVAL '-30 day')"

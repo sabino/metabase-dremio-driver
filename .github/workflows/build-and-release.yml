@@ -3,12 +3,18 @@ name: Build And Release
 on:
   pull_request:
   push:
-    branches:
-      - main
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
+      metabase_version:
+        description: Metabase git ref or release tag to build against
+        required: false
+        default: ""
+      dremio_jdbc_version:
+        description: Dremio JDBC version to bundle
+        required: false
+        default: ""
       plugin_version:
         description: Plugin version embedded in metabase-plugin.yaml
         required: false
@@ -25,19 +31,43 @@ jobs:
     permissions:
       contents: write
     env:
-      DEFAULT_PLUGIN_VERSION: 2.0.0-SNAPSHOT
-      METABASE_VERSION: v0.60.0-beta
-      DREMIO_JDBC_VERSION: 26.0.5-202509091642240013-f5051a07
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       JAVA_TOOL_OPTIONS: --add-opens=java.base/java.nio=ALL-UNNAMED
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Load tracked versions
+        shell: bash
+        run: cat .github/driver-versions.env >> "${GITHUB_ENV}"
+
+      - name: Resolve build versions
+        id: versions
+        shell: bash
+        run: |
+          metabase_version="${METABASE_VERSION}"
+          dremio_jdbc_version="${DREMIO_JDBC_VERSION}"
+          plugin_version="${PLUGIN_VERSION}"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            [[ -n "${{ github.event.inputs.metabase_version }}" ]] && metabase_version="${{ github.event.inputs.metabase_version }}"
+            [[ -n "${{ github.event.inputs.dremio_jdbc_version }}" ]] && dremio_jdbc_version="${{ github.event.inputs.dremio_jdbc_version }}"
+            [[ -n "${{ github.event.inputs.plugin_version }}" ]] && plugin_version="${{ github.event.inputs.plugin_version }}"
+          fi
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            plugin_version="${GITHUB_REF_NAME#v}"
+          fi
+
+          echo "metabase_version=${metabase_version}" >> "${GITHUB_OUTPUT}"
+          echo "dremio_jdbc_version=${dremio_jdbc_version}" >> "${GITHUB_OUTPUT}"
+          echo "plugin_version=${plugin_version}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout Metabase
         uses: actions/checkout@v4
         with:
           repository: metabase/metabase
-          ref: ${{ env.METABASE_VERSION }}
+          ref: ${{ steps.versions.outputs.metabase_version }}
           path: metabase
 
       - name: Set up Java 21
@@ -51,41 +81,31 @@ jobs:
         with:
           cli: latest
 
-      - name: Resolve plugin version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            version="${GITHUB_REF_NAME#v}"
-          elif [[ -n "${{ github.event.inputs.plugin_version }}" ]]; then
-            version="${{ github.event.inputs.plugin_version }}"
-          else
-            version="${DEFAULT_PLUGIN_VERSION}"
-          fi
-          echo "plugin_version=${version}" >> "${GITHUB_OUTPUT}"
-
       - name: Build plugin jar
+        shell: bash
         run: |
           chmod +x build.sh
           export METABASE_DIR="${GITHUB_WORKSPACE}/metabase"
+          export DREMIO_JDBC_VERSION="${{ steps.versions.outputs.dremio_jdbc_version }}"
           ./build.sh
 
       - name: Stamp plugin version in manifest
         run: |
           python3 - <<'PY'
+          import re
           import zipfile
           from pathlib import Path
 
           jar_path = Path("target/dremio.metabase-driver.jar")
           tmp_path = Path("target/dremio.metabase-driver.tmp.jar")
-          version = "${{ steps.version.outputs.plugin_version }}"
+          version = "${{ steps.versions.outputs.plugin_version }}"
 
           with zipfile.ZipFile(jar_path) as src, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as dst:
               for info in src.infolist():
                   data = src.read(info.filename)
                   if info.filename == "metabase-plugin.yaml":
                       text = data.decode("utf-8")
-                      text = __import__("re").sub(r"(?m)^(\\s*version:\\s*).*$", rf"\\g<1>{version}", text, count=1)
+                      text = re.sub(r"(?m)^(\s*version:\s*).*$", rf"\g<1>{version}", text, count=1)
                       data = text.encode("utf-8")
                   dst.writestr(info, data)
 
@@ -129,7 +149,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', steps.version.outputs.plugin_version) }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', steps.versions.outputs.plugin_version) }}
           generate_release_notes: true
           files: |
             target/dremio.metabase-driver.jar

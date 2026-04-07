@@ -1,0 +1,86 @@
+name: Sync Upstream Versions
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      metabase_version:
+        description: Override Metabase git ref or release tag
+        required: false
+        default: ""
+      dremio_jdbc_version:
+        description: Override the pinned Dremio JDBC version
+        required: false
+        default: ""
+      metabase_release_channel:
+        description: Metabase release channel to track when no explicit version is provided
+        required: false
+        default: "prerelease"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      INPUT_METABASE_VERSION: ${{ github.event.inputs.metabase_version || '' }}
+      INPUT_DREMIO_JDBC_VERSION: ${{ github.event.inputs.dremio_jdbc_version || '' }}
+      INPUT_METABASE_RELEASE_CHANNEL: ${{ github.event.inputs.metabase_release_channel || 'prerelease' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update tracked versions
+        shell: bash
+        run: |
+          args=(
+            --versions-file .github/driver-versions.env
+            --metabase-channel "${INPUT_METABASE_RELEASE_CHANNEL}"
+          )
+
+          if [[ -n "${INPUT_METABASE_VERSION}" ]]; then
+            args+=(--metabase-version "${INPUT_METABASE_VERSION}")
+          fi
+
+          if [[ -n "${INPUT_DREMIO_JDBC_VERSION}" ]]; then
+            args+=(--dremio-jdbc-version "${INPUT_DREMIO_JDBC_VERSION}")
+          fi
+
+          python3 scripts/sync_versions.py "${args[@]}"
+
+      - name: Detect version changes
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet -- .github/driver-versions.env; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create pull request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: automation/update-driver-versions
+          delete-branch: true
+          commit-message: "chore: update tracked Metabase and Dremio versions"
+          title: "chore: update tracked Metabase and Dremio versions"
+          body: |
+            Updates the tracked build inputs for this driver fork.
+
+            - refreshes the tracked Metabase version used for builds
+            - optionally updates the pinned Dremio JDBC version when provided manually
+
+            The PR build workflow will validate the jar against the updated inputs.
+          labels: |
+            dependencies
+            automation
