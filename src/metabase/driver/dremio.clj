@@ -41,14 +41,19 @@
 ;;; ----------------------------------------------------- Impls ------------------------------------------------------
 ;;; +----------------------------------------------------------------------------------------------------------------+
 
-;; don't use the Postgres specified implementation for `describe-database` and `describe-table`
-(defmethod driver/describe-database :dremio
-           [& args]
-           (apply (get-method driver/describe-database :sql-jdbc) args))
+;; don't use the Postgres-specific metadata sync implementations. Dremio works better
+;; with the generic SQL-JDBC metadata path.
+(defmethod driver/describe-database* :dremio
+  [& args]
+  (apply (get-method driver/describe-database* :sql-jdbc) args))
 
 (defmethod driver/describe-table :dremio
   [& args]
   (apply (get-method driver/describe-table :sql-jdbc) args))
+
+(defmethod driver/describe-fields :dremio
+  [& args]
+  (apply (get-method driver/describe-fields :sql-jdbc) args))
 
                   
 (defmethod sql-jdbc.conn/connection-details->spec :dremio
